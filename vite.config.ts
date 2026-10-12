@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 import { nitro } from 'nitro/vite'
 import viteReact from '@vitejs/plugin-react'
@@ -30,17 +30,33 @@ function serviceWorker(): Plugin {
   }
 }
 
-export default defineConfig({
-  server: { port: Number(process.env.PORT) || 3000 },
-  define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
-    __BUILD_ID__: JSON.stringify(BUILD_ID),
-  },
-  plugins: [
-    tailwindcss(),
-    tanstackStart(), // must come before react()
-    nitro(), // production server: `npm run build` → .output/ (Node by default; auto-detects Vercel, Netlify, …)
-    viteReact(),
-    serviceWorker(),
-  ],
+export default defineConfig(({ mode }) => {
+  const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env }
+  // Accept the variable names Vercel's Supabase integration creates as well as our own.
+  // Only the public URL and the publishable/anon key, both safe in the browser by design.
+  // Secret keys (SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SECRET_KEY) are never read here.
+  const supabaseUrl = env.VITE_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || env.SUPABASE_URL || ''
+  const supabaseKey =
+    env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    env.SUPABASE_PUBLISHABLE_KEY ||
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    ''
+
+  return {
+    server: { port: Number(process.env.PORT) || 3000 },
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version),
+      __BUILD_ID__: JSON.stringify(BUILD_ID),
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
+      'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(supabaseKey),
+    },
+    plugins: [
+      tailwindcss(),
+      tanstackStart(), // must come before react()
+      nitro(), // production server: `npm run build` → .output/ (Node by default; auto-detects Vercel, Netlify, …)
+      viteReact(),
+      serviceWorker(),
+    ],
+  }
 })
