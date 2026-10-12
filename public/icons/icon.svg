@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Platewise mark: the plate (ring), today's portion (arc) and the centre dot.
+       Content stays inside the central 66% so it survives Android's adaptive-icon mask. -->
+  <rect width="1024" height="1024" fill="#0b0b0b"/>
+  <circle cx="512" cy="512" r="236" fill="none" stroke="#f6f5f1" stroke-opacity="0.28" stroke-width="84"/>
+  <path d="M512 276a236 236 0 0 1 236 236" fill="none" stroke="#b9b0f5" stroke-width="84" stroke-linecap="round"/>
+  <circle cx="512" cy="512" r="62" fill="#f6f5f1"/>
+</svg>

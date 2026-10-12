@@ -1,0 +1,93 @@
+# Builds a signed Android APK and publishes it as a GitHub Release.
+#
+#   git tag v1.1.0 && git push origin v1.1.0
+#
+# Installed apps poll /api/app-version, which reads this repo's latest release
+# (set ANDROID_RELEASES_REPO on the web server). They then offer the new APK.
+#
+# One-time setup (repo → Settings → Secrets and variables → Actions):
+#   Variables: CAP_SERVER_URL        https URL of the deployed web app
+#   Secrets:   ANDROID_KEYSTORE_BASE64  base64 of your release .jks (see README)
+#              ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+name: Android release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, e.g. 1.1.0 (creates tag v<version>)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          RAW="${{ github.event.inputs.version || github.ref_name }}"
+          NAME="${RAW#v}"
+          if ! [[ "$NAME" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Version must look like 1.2.3 (got '$RAW')"; exit 1
+          fi
+          # versionCode must only ever grow: 1.2.3 → 10203 (keep minor/patch below 100).
+          CODE=$(( ${BASH_REMATCH[1]} * 10000 + ${BASH_REMATCH[2]} * 100 + ${BASH_REMATCH[3]} ))
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - run: npm ci
+
+      - name: Sync Capacitor (points the app at the deployed site)
+        env:
+          CAP_SERVER_URL: ${{ vars.CAP_SERVER_URL }}
+        run: npm run mobile:release
+
+      - name: Restore signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is missing. Updates must be signed with one fixed key."; exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Build release APK
+        working-directory: android
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/platewise-v${VERSION_NAME}.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}
+          name: Platewise v${{ steps.version.outputs.name }}
+          files: platewise-v${{ steps.version.outputs.name }}.apk
+          # Edit the notes on GitHub afterwards if you like; the app shows them in its update dialog.
+          generate_release_notes: true
+          make_latest: true

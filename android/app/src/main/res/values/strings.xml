@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Platewise</string>
+    <string name="title_activity_main">Platewise</string>
+    <string name="package_name">app.platewise.mobile</string>
+    <string name="custom_url_scheme">app.platewise.mobile</string>
+</resources>

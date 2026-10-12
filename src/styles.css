@@ -1,0 +1,160 @@
+@import 'tailwindcss';
+
+/* ─── Design tokens ──────────────────────────────────────────────────────────
+   Semantic colors live in CSS variables so light/dark swap in one place and
+   SVG charts can reference them directly (fill="var(--energy)").
+   Macro colors are a CVD-validated categorical trio (protein · carbs · fats);
+   energy (calories) gets its own hue so it never impersonates a macro. */
+:root {
+  /* Safe areas: Capacitor's SystemBars ("css" mode) injects --safe-area-inset-*;
+     browsers and the installed PWA fall back to env(). */
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+:root {
+  color-scheme: light;
+  --page: #f6f5f1;
+  --surface: #fdfdfc;
+  --surface-2: #f1f0eb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #7a7873;
+  --line: rgb(11 11 11 / 0.09);
+  --grid: #e7e6e0;
+  --axis: #c3c2b7;
+
+  --energy: #4a3aa7;
+  --energy-track: #e6e3f7;
+  --protein: #2a78d6;
+  --protein-track: #d9e8fa;
+  --carbs: #eb6834;
+  --carbs-track: #fbe3d8;
+  --fats: #1baf7a;
+  --fats-track: #d4f1e5;
+
+  --good: #006300;
+  --critical: #c73232;
+  --critical-wash: #fbeaea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #242422;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #8f8d86;
+    --line: rgb(255 255 255 / 0.1);
+    --grid: #2c2c2a;
+    --axis: #383835;
+
+    --energy: #9085e9;
+    --energy-track: #2a2742;
+    --protein: #3987e5;
+    --protein-track: #1b2b40;
+    --carbs: #d95926;
+    --carbs-track: #3b2318;
+    --fats: #199e70;
+    --fats-track: #14332a;
+
+    --good: #2fbf2f;
+    --critical: #ef7a7a;
+    --critical-wash: #3a1d1d;
+  }
+}
+
+@theme inline {
+  --font-sans: 'Schibsted Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-energy: var(--energy);
+  --color-energy-track: var(--energy-track);
+  --color-protein: var(--protein);
+  --color-carbs: var(--carbs);
+  --color-fats: var(--fats);
+  --color-good: var(--good);
+  --color-critical: var(--critical);
+  --color-critical-wash: var(--critical-wash);
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-page text-ink font-sans antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--energy);
+    outline-offset: 2px;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
+/* Component classes as Tailwind v4 utilities (so they compose with @apply and variants). */
+@utility card {
+  @apply rounded-2xl border border-line bg-surface;
+}
+@utility field {
+  @apply w-full rounded-xl border border-line bg-surface-2 px-3 py-2.5 text-[15px] text-ink outline-none transition placeholder:text-muted focus:border-energy focus:bg-surface;
+}
+@utility label {
+  @apply mb-1.5 block text-[13px] font-medium text-ink-2;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-ink text-page hover:opacity-90;
+}
+@utility btn-secondary {
+  @apply btn border border-line bg-surface text-ink hover:bg-surface-2;
+}
+@utility btn-ghost {
+  @apply btn text-ink-2 hover:bg-surface-2 hover:text-ink;
+}
+@utility icon-btn {
+  @apply inline-flex size-9 items-center justify-center rounded-lg text-muted transition hover:bg-surface-2 hover:text-ink;
+}
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.shimmer {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--line) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

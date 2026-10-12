@@ -1,0 +1,21 @@
+node_modules
+.env
+.env.*
+!.env.example
+
+# build output
+.output
+.nitro
+.tanstack
+dist
+*.local
+
+# mobile
+mobile/www
+# Android signing keys: keep them out of git. Back them up somewhere safe instead.
+*.jks
+*.keystore
+
+# local tooling
+.claude/
+.impeccable/

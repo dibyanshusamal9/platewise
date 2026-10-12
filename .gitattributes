@@ -1,0 +1,6 @@
+# Normalise line endings in the repo; shell scripts must stay LF for the Linux CI build.
+* text=auto
+android/gradlew text eol=lf
+*.sh text eol=lf
+*.png binary
+*.jar binary
