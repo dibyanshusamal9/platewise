@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { CheckCircle2, ExternalLink, Eye, EyeOff, KeyRound, ShieldCheck } from 'lucide-react'
 import { useUser } from '../lib/auth'
-import { GEMINI_KEY_PATTERN, clearGeminiKey, maskKey, saveGeminiKey, useGeminiKey } from '../lib/gemini-key'
+import { GEMINI_KEY_PATTERN, clearGeminiKey, maskKey, normalizeGeminiKey, saveGeminiKey, useGeminiKey } from '../lib/gemini-key'
 import { checkGeminiKey } from '../server/meals.functions'
 import { ErrorNote, Spinner } from './ui'
 
@@ -101,8 +101,14 @@ function KeyForm({ onSaved, onCancel }: { onSaved: (key: string) => void; onCanc
   const [visible, setVisible] = useState(false)
   const check = useMutation({ mutationFn: (apiKey: string) => checkGeminiKey({ data: { apiKey } }) })
 
-  const trimmed = value.trim()
+  const trimmed = normalizeGeminiKey(value)
   const looksValid = GEMINI_KEY_PATTERN.test(trimmed)
+  const hint =
+    !trimmed || looksValid
+      ? null
+      : trimmed.length < 20
+        ? 'That looks too short. Copy the whole key from AI Studio.'
+        : 'That contains characters a key never has. Copy it again from AI Studio.'
 
   function submit(e: FormEvent) {
     e.preventDefault()
@@ -129,7 +135,7 @@ function KeyForm({ onSaved, onCancel }: { onSaved: (key: string) => void; onCanc
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            placeholder="Paste your key"
+            placeholder="Paste your key (starts with AQ. or AIza)"
             className="field num pr-11"
           />
           <button
@@ -141,9 +147,7 @@ function KeyForm({ onSaved, onCancel }: { onSaved: (key: string) => void; onCanc
             {visible ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
           </button>
         </div>
-        {trimmed && !looksValid && (
-          <p className="mt-1.5 text-xs text-muted">That doesn’t look like a complete key yet. Copy the whole value.</p>
-        )}
+        {hint && <p className="mt-1.5 text-xs text-muted">{hint}</p>}
       </div>
 
       {check.isError && <ErrorNote>{check.error.message}</ErrorNote>}

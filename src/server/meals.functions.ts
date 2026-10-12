@@ -4,7 +4,7 @@ import { createMiddleware, createServerFn } from '@tanstack/react-start'
 import { getRequestHeader, setResponseHeader } from '@tanstack/react-start/server'
 import { z } from 'zod'
 import { getSupabase } from '../lib/supabase'
-import { GEMINI_KEY_PATTERN, readGeminiKey } from '../lib/gemini-key'
+import { GEMINI_KEY_PATTERN, normalizeGeminiKey, readGeminiKey } from '../lib/gemini-key'
 import { createUserScopedSupabase } from './supabase.server'
 import { GEMINI_KEY_MESSAGES, GeminiKeyError, estimateNutrition, verifyGeminiKey } from './nutrition-ai.server'
 import { saveMeal } from './meals.server'
@@ -44,7 +44,7 @@ const withGeminiKey = createMiddleware({ type: 'function' })
     return next({ headers: key ? { 'X-Gemini-Key': key } : {} })
   })
   .server(async ({ next }) => {
-    const geminiKey = getRequestHeader('x-gemini-key')?.trim() ?? ''
+    const geminiKey = normalizeGeminiKey(getRequestHeader('x-gemini-key') ?? '')
     if (!geminiKey) throw new GeminiKeyError(GEMINI_KEY_MESSAGES.missing)
     if (!GEMINI_KEY_PATTERN.test(geminiKey)) throw new GeminiKeyError(GEMINI_KEY_MESSAGES.invalid)
     return next({ context: { geminiKey } })
@@ -126,5 +126,9 @@ export const estimateMeal = createServerFn({ method: 'POST' })
  */
 export const checkGeminiKey = createServerFn({ method: 'POST' })
   .middleware([requireUser])
-  .validator(z.object({ apiKey: z.string().trim().regex(GEMINI_KEY_PATTERN, 'That doesn’t look like a Gemini API key.') }))
+  .validator(
+    z.object({
+      apiKey: z.string().transform(normalizeGeminiKey).pipe(z.string().regex(GEMINI_KEY_PATTERN, 'That doesn’t look like a Gemini API key.')),
+    }),
+  )
   .handler(async ({ data }) => verifyGeminiKey(data.apiKey))

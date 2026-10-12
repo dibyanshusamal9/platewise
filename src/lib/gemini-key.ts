@@ -10,8 +10,19 @@ import { useSyncExternalStore } from 'react'
 const PREFIX = 'platewise:gemini-key:'
 const listeners = new Set<() => void>()
 
-/** Google AI Studio keys are opaque tokens; this only rejects obvious typos. */
-export const GEMINI_KEY_PATTERN = /^[A-Za-z0-9_-]{20,200}$/
+/**
+ * Keys from AI Studio are opaque: older ones look like "AIza…", and ones created
+ * since May 2026 are auth keys like "AQ.…". Accept any visible ASCII so future
+ * formats work too; Google does the real check when the key is saved.
+ */
+export const GEMINI_KEY_PATTERN = /^[\x21-\x7E]{20,512}$/
+
+/** Removes what phones add when copying: spaces, line breaks, invisible zero-width characters, wrapping quotes. */
+export function normalizeGeminiKey(raw: string): string {
+  return raw
+    .replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/^["'\x60\u201C\u201D\u2018\u2019]+|["'\x60\u201C\u201D\u2018\u2019]+$/g, '')
+}
 
 function emit() {
   listeners.forEach((l) => l())
@@ -26,7 +37,7 @@ export function readGeminiKey(userId: string): string | null {
 }
 
 export function saveGeminiKey(userId: string, key: string) {
-  window.localStorage.setItem(PREFIX + userId, key.trim())
+  window.localStorage.setItem(PREFIX + userId, normalizeGeminiKey(key))
   emit()
 }
 
