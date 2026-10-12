@@ -19,3 +19,4 @@ mobile/www
 # local tooling
 .claude/
 .impeccable/
+.vercel
