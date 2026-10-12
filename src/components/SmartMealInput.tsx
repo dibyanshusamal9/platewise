@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
-import { ArrowUp, Camera, Check, ChevronDown, ImagePlus, Sparkles, Undo2, X } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { ArrowUp, Camera, Check, ChevronDown, ImagePlus, KeyRound, Sparkles, Undo2, X } from 'lucide-react'
 import type { Json, MealType } from '../lib/database.types'
 import { PhotoError, preparePhoto, type PreparedPhoto } from '../lib/image'
 import { MEAL_TYPES, fmtGrams, fmtKcal, fmtTime, mealTypeForTime, type Meal } from '../lib/nutrition'
@@ -305,7 +306,17 @@ export function SmartMealInput() {
 
       <div aria-live="polite">
         {pending && <EstimatingCard photoUrl={logPhoto.isPending ? photo?.previewUrl : undefined} />}
-        {error && !pending && <ErrorNote>{error}</ErrorNote>}
+        {error && !pending && (
+          <div className="space-y-2">
+            <ErrorNote>{error}</ErrorNote>
+            {/Gemini API key/i.test(error) && (
+              <Link to="/goals" hash="gemini-key" className="btn-secondary px-3 py-1.5 text-[13px]">
+                <KeyRound className="size-4" aria-hidden />
+                Open key settings
+              </Link>
+            )}
+          </div>
+        )}
         {lastLogged && !pending && <LoggedCard meal={lastLogged} onUndone={() => setLastLogged(null)} />}
       </div>
     </section>

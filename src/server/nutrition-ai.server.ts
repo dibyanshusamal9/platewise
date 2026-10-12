@@ -1,4 +1,4 @@
-// Server-only: talks to Gemini with the secret API key. The `.server.ts` suffix
+// Server-only: talks to Gemini using the caller's own API key. The `.server.ts` suffix
 // makes TanStack Start refuse to bundle this file into client code.
 import { GoogleGenAI } from '@google/genai'
 import { z } from 'zod'
@@ -126,16 +126,53 @@ export interface NutritionEstimate {
 /** Thrown for problems the user can fix by rephrasing; the message is shown in the UI. */
 export class NutritionInputError extends Error {}
 
-let client: GoogleGenAI | undefined
+/**
+ * Messages shown when the user's own key is the problem. The UI links these to the
+ * Gemini key settings, so keep the wording stable.
+ */
+export const GEMINI_KEY_MESSAGES = {
+  missing: 'Add your Gemini API key in Settings to start logging meals.',
+  invalid: 'Your Gemini API key was rejected. Check or replace it in Settings.',
+  quota: 'Your Gemini API key has hit its rate limit or quota. Wait a minute, or check your usage in Google AI Studio.',
+} as const
 
-function getClient(): GoogleGenAI {
-  // Read per call (not at module scope) so edge runtimes that inject env per request work too.
-  const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not set on the server. Add it to .env and restart the dev server.')
+/** A problem with the caller's key: shown to them as-is and never retried. */
+export class GeminiKeyError extends Error {}
+
+function clientFor(apiKey: string) {
+  // Every user brings their own key, so build a client per request. The key is
+  // used for this one call only: never cached, stored or logged.
+  return new GoogleGenAI({ apiKey })
+}
+
+function classifyGeminiError(err: unknown): GeminiKeyError | null {
+  const status = typeof err === 'object' && err !== null && 'status' in err ? Number(err.status) : 0
+  const message = err instanceof Error ? err.message : ''
+  if (status === 401 || status === 403 || /API_KEY_INVALID|API key not valid|PERMISSION_DENIED/i.test(message)) {
+    return new GeminiKeyError(GEMINI_KEY_MESSAGES.invalid)
   }
-  client ??= new GoogleGenAI({ apiKey })
-  return client
+  if (status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(message)) {
+    return new GeminiKeyError(GEMINI_KEY_MESSAGES.quota)
+  }
+  return null
+}
+
+const currentModel = () => process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL
+
+/** Cheap check that a key works with our model (model metadata only; no tokens used). */
+export async function verifyGeminiKey(apiKey: string): Promise<{ model: string }> {
+  const model = currentModel()
+  try {
+    await clientFor(apiKey).models.get({ model })
+    return { model }
+  } catch (err) {
+    const keyError = classifyGeminiError(err)
+    if (keyError) throw keyError
+    const status = typeof err === 'object' && err !== null && 'status' in err ? Number(err.status) : 0
+    if (status === 404) throw new GeminiKeyError(`Your key works, but the model "${model}" isn't available to it.`)
+    console.error('[nutrition-ai] key check failed', err)
+    throw new Error('Could not reach Gemini to check the key. Please try again.')
+  }
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10
@@ -183,9 +220,9 @@ function buildRequest(input: EstimateInput) {
   }
 }
 
-async function requestEstimate(input: EstimateInput, model: string) {
+async function requestEstimate(input: EstimateInput, model: string, apiKey: string) {
   const { systemInstruction, parts } = buildRequest(input)
-  const response = await getClient().models.generateContent({
+  const response = await clientFor(apiKey).models.generateContent({
     model,
     contents: [{ role: 'user', parts }],
     config: {
@@ -200,24 +237,26 @@ async function requestEstimate(input: EstimateInput, model: string) {
 }
 
 /** Estimate calories and macros from a text description or a meal photo (+ optional note). */
-export async function estimateNutrition(input: EstimateInput | string): Promise<NutritionEstimate> {
+export async function estimateNutrition(input: EstimateInput | string, apiKey: string): Promise<NutritionEstimate> {
+  if (!apiKey) throw new GeminiKeyError(GEMINI_KEY_MESSAGES.missing)
   const request: EstimateInput = typeof input === 'string' ? { kind: 'text', description: input } : input
-  const model = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL
+  const model = currentModel()
 
   let parsed: z.infer<typeof GeminiEstimate> | undefined
   let lastError: unknown
   // One retry covers the rare malformed / truncated response.
   for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
     try {
-      parsed = await requestEstimate(request, model)
+      parsed = await requestEstimate(request, model, apiKey)
     } catch (err) {
+      // A bad key or exhausted quota won't fix itself on retry: tell the user straight away.
+      const keyError = classifyGeminiError(err)
+      if (keyError) throw keyError
       lastError = err
     }
   }
   if (!parsed) {
     console.error('[nutrition-ai] Gemini request failed', lastError)
-    const reason = lastError instanceof Error ? lastError.message : ''
-    if (reason.includes('GEMINI_API_KEY')) throw lastError
     throw new Error('Could not get a nutrition estimate right now. Please try again in a moment.')
   }
 

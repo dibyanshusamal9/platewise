@@ -4,14 +4,15 @@ import { createMiddleware, createServerFn } from '@tanstack/react-start'
 import { getRequestHeader, setResponseHeader } from '@tanstack/react-start/server'
 import { z } from 'zod'
 import { getSupabase } from '../lib/supabase'
+import { GEMINI_KEY_PATTERN, readGeminiKey } from '../lib/gemini-key'
 import { createUserScopedSupabase } from './supabase.server'
-import { estimateNutrition } from './nutrition-ai.server'
+import { GEMINI_KEY_MESSAGES, GeminiKeyError, estimateNutrition, verifyGeminiKey } from './nutrition-ai.server'
 import { saveMeal } from './meals.server'
 
 /**
  * Forwards the browser's Supabase access token and verifies it on the server.
- * Every server function below is a public HTTP endpoint, so this check — not the
- * UI — is what keeps the Gemini key from being used by anonymous callers.
+ * Every server function below is a public HTTP endpoint, so this check (not the
+ * UI) is what keeps them from being used by anonymous callers.
  */
 const requireUser = createMiddleware({ type: 'function' })
   .client(async ({ next }) => {
@@ -30,6 +31,23 @@ const requireUser = createMiddleware({ type: 'function' })
 
     setResponseHeader('Cache-Control', 'no-store')
     return next({ context: { supabase, userId: data.user.id } })
+  })
+
+/**
+ * Sends the signed-in user's own Gemini key (kept on their device) with the request.
+ * The server uses it for this request only and never stores or logs it.
+ */
+const withGeminiKey = createMiddleware({ type: 'function' })
+  .client(async ({ next }) => {
+    const { data } = await getSupabase().auth.getSession()
+    const key = data.session ? readGeminiKey(data.session.user.id) : null
+    return next({ headers: key ? { 'X-Gemini-Key': key } : {} })
+  })
+  .server(async ({ next }) => {
+    const geminiKey = getRequestHeader('x-gemini-key')?.trim() ?? ''
+    if (!geminiKey) throw new GeminiKeyError(GEMINI_KEY_MESSAGES.missing)
+    if (!GEMINI_KEY_PATTERN.test(geminiKey)) throw new GeminiKeyError(GEMINI_KEY_MESSAGES.invalid)
+    return next({ context: { geminiKey } })
   })
 
 const description = z
@@ -66,10 +84,10 @@ const LogPhotoInput = z.object({
 
 /** Text in → Gemini estimate → validated → saved. Returns the stored row. */
 export const logMeal = createServerFn({ method: 'POST' })
-  .middleware([requireUser])
+  .middleware([requireUser, withGeminiKey])
   .validator(LogMealInput)
   .handler(async ({ data, context }) => {
-    const estimate = await estimateNutrition(data.description)
+    const estimate = await estimateNutrition(data.description, context.geminiKey)
     return saveMeal(context, { ...data, inputType: 'text' }, estimate)
   })
 
@@ -78,15 +96,13 @@ export const logMeal = createServerFn({ method: 'POST' })
  * The full photo is used only for the estimate and is never stored.
  */
 export const logMealFromPhoto = createServerFn({ method: 'POST' })
-  .middleware([requireUser])
+  .middleware([requireUser, withGeminiKey])
   .validator(LogPhotoInput)
   .handler(async ({ data, context }) => {
-    const estimate = await estimateNutrition({
-      kind: 'photo',
-      imageBase64: data.imageBase64,
-      mimeType: data.mimeType,
-      note: data.note,
-    })
+    const estimate = await estimateNutrition(
+      { kind: 'photo', imageBase64: data.imageBase64, mimeType: data.mimeType, note: data.note },
+      context.geminiKey,
+    )
     // What the person said beats our summary; otherwise list what Gemini saw, so the
     // timeline and the editor's "Re-estimate" button have real text to work with.
     const seen = estimate.items.map((i) => (i.portion ? `${i.name} (${i.portion})` : i.name)).join(', ')
@@ -100,6 +116,15 @@ export const logMealFromPhoto = createServerFn({ method: 'POST' })
 
 /** Estimate only (no save) — used by the editor's "Re-estimate" button. */
 export const estimateMeal = createServerFn({ method: 'POST' })
-  .middleware([requireUser])
+  .middleware([requireUser, withGeminiKey])
   .validator(z.object({ description }))
-  .handler(async ({ data }) => estimateNutrition(data.description))
+  .handler(async ({ data, context }) => estimateNutrition(data.description, context.geminiKey))
+
+/**
+ * Checks a key before the user saves it. Requires sign-in so the endpoint can't be
+ * used anonymously to test stolen keys. The key is checked and then forgotten.
+ */
+export const checkGeminiKey = createServerFn({ method: 'POST' })
+  .middleware([requireUser])
+  .validator(z.object({ apiKey: z.string().trim().regex(GEMINI_KEY_PATTERN, 'That doesn’t look like a Gemini API key.') }))
+  .handler(async ({ data }) => verifyGeminiKey(data.apiKey))

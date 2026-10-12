@@ -16,7 +16,6 @@ declare const __BUILD_ID__: string
 
 declare namespace NodeJS {
   interface ProcessEnv {
-    readonly GEMINI_API_KEY?: string
     readonly GEMINI_MODEL?: string
     /** GitHub repo ("owner/name") whose latest Release holds the newest APK. */
     readonly ANDROID_RELEASES_REPO?: string

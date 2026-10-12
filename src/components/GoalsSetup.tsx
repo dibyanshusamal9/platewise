@@ -18,6 +18,7 @@ import {
 } from '../lib/nutrition'
 import { useGoals, useProfile, useSaveGoals, useTodayKey } from '../lib/queries'
 import { AppUpdatesCard } from './UpdateNotices'
+import { GeminiKeySettings } from './GeminiKeySettings'
 import { ErrorNote, Skeleton, Spinner, Swatch } from './ui'
 
 /** Limits mirror the CHECK constraints in supabase/schema.sql. */
@@ -234,6 +235,7 @@ function GoalsEditor({ current, profile, todayKey }: { current: DailyGoal | null
         />
       </div>
 
+      <GeminiKeySettings variant="settings" />
       <AppUpdatesCard />
     </div>
   )

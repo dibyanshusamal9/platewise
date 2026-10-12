@@ -18,7 +18,7 @@ AI meal tracking. Describe a meal in plain English. Gemini estimates calories an
 
 3. **Configure auth.** Go to **Authentication → Sign In / Providers** and make sure **Email** is enabled. For local testing you can switch off **Confirm email** so new accounts can sign in straight away.
 
-4. **Get a Gemini API key** from [Google AI Studio](https://aistudio.google.com/apikey).
+4. **Gemini:** nothing to set up on the server. Each user adds their own free key from [Google AI Studio](https://aistudio.google.com/apikey) inside the app (see [Bring your own Gemini key](#bring-your-own-gemini-key)).
 
 5. **Add environment variables.** Copy the example file to `.env` in the project root:
 
@@ -30,7 +30,6 @@ AI meal tracking. Describe a meal in plain English. Gemini estimates calories an
    |---|---|---|
    | `VITE_SUPABASE_URL` | Project Settings → API (or the **Connect** button) | Yes (public by design) |
    | `VITE_SUPABASE_PUBLISHABLE_KEY` | Same page. Use the publishable key (`sb_publishable_…`) or the legacy `anon` key | Yes (protected by RLS) |
-   | `GEMINI_API_KEY` | Google AI Studio | **No.** Only server functions read it |
    | `GEMINI_MODEL` *(optional)* | e.g. `gemini-3.5-flash` | No. Defaults to the `gemini-flash-latest` alias |
 
 6. **Start the dev server**
@@ -39,7 +38,7 @@ AI meal tracking. Describe a meal in plain English. Gemini estimates calories an
    npm run dev
    ```
 
-   Open http://localhost:3000, create an account, and set your daily targets under **Targets**.
+   Open http://localhost:3000, create an account, paste your Gemini key when asked, and set your daily targets under **Settings**.
 
 **Other scripts:** `npm run typecheck`, `npm run build` (writes `.output/`), and `npm start` (runs the production server and reads `.env` if present).
 
@@ -54,7 +53,7 @@ The app is a [Capacitor](https://capacitorjs.com) shell (`android/`) that loads 
 | What changed | How it reaches phones | What you do |
 |---|---|---|
 | Anything in `src/`: UI, features, the Gemini prompt | The service worker detects the new deploy and shows **"A new version is ready → Reload"**. No store, no APK. | Deploy the web app. |
-| The native shell: app icon, Capacitor plugins, Android config | The app checks the latest GitHub Release on launch and on resume. It shows **Update available (v1.0 → v1.1)** with your release notes, and **Download / Later / Don't show again**. Users can also tap **Targets → Check for updates**. | Push a tag (below). |
+| The native shell: app icon, Capacitor plugins, Android config | The app checks the latest GitHub Release on launch and on resume. It shows **Update available (v1.0 → v1.1)** with your release notes, and **Download / Later / Don't show again**. Users can also tap **Settings → Check for updates**. | Push a tag (below). |
 | A breaking change old shells can't handle | Shells below `ANDROID_MIN_VERSION` get a blocking **Update required** screen. | Raise `ANDROID_MIN_VERSION` on the server. |
 
 ### One-time setup
@@ -115,10 +114,20 @@ SmartMealInput ──logMeal()──▶ server function (POST /_serverFn/…)
                               ◀──┘ returns the saved row → dashboard queries invalidate
 ```
 
-- The Gemini key never reaches the browser. It is read only inside `src/server/nutrition-ai.server.ts`, and the `.server.ts` suffix makes TanStack Start refuse to bundle that file for the client.
+- Each request is made with the signed-in user's own Gemini key (see below). The prompts and Gemini code live only in `src/server/nutrition-ai.server.ts`; the `.server.ts` suffix makes TanStack Start refuse to bundle that file for the client.
 - Server functions are public HTTP endpoints, so each one checks the caller's Supabase access token. Anonymous or forged tokens are rejected before Gemini is called.
 - No service-role key is used anywhere. The server writes with the user's own JWT, so the same RLS policies apply as in the browser.
 - Input that isn't food ("hello!") is rejected with Gemini's explanation, and nothing is saved.
+
+### Bring your own Gemini key
+
+Every user connects their own free Gemini API key, so usage and quota are theirs and the app owner pays nothing for AI.
+
+- **First run:** after signing in, the Today page shows **Connect your Gemini API key** with three steps (open AI Studio, create a key, paste it). **Check & save** verifies the key with Google before saving. The check reads model info only, so it costs no tokens.
+- **Where it lives:** only on that device, in the browser storage for that account. It is sent over HTTPS in an `X-Gemini-Key` header with each meal request, used for that one Gemini call, and never stored, cached or logged by the server, or written to the database.
+- **Clear errors:** a rejected or revoked key, or an exhausted quota, shows a specific message with an **Open key settings** link, and is not retried.
+- **Manage it:** Settings → **Gemini API key** to replace or remove it.
+- **Trade-offs:** the key is per device, so users enter it once on their phone and once on the web. Like anything in browser storage, it is readable by scripts on this site, so the app renders no third-party or user-supplied HTML. The `checkGeminiKey` endpoint requires sign-in, so it can't be used anonymously to test stolen keys.
 
 ### Scan from plate
 
@@ -155,7 +164,8 @@ src/
     Dashboard.tsx                calorie ring, remaining, deficit/surplus, macro meters
     WeeklyReport.tsx             7-day metrics, bar chart, macro split, editable timeline
     MealTimeline.tsx             meal rows with inline edit (+ AI re-estimate) and delete
-    GoalsSetup.tsx               targets form + Mifflin-St Jeor TDEE calculator
+    GoalsSetup.tsx               Settings page: targets + TDEE calculator, Gemini key, app updates
+    GeminiKeySettings.tsx        bring-your-own Gemini key: first-run setup and settings card
     AuthScreen.tsx, ui.tsx, Logo.tsx
   server/
     meals.functions.ts           logMeal / logMealFromPhoto / estimateMeal + auth middleware
@@ -166,6 +176,7 @@ src/
     nutrition.ts                 date keys, aggregation, goal versioning, TDEE math
     queries.ts                   TanStack Query hooks (reads + mutations)
     updates.ts                   update store: service worker + native-shell version checks
+    gemini-key.ts                per-user, on-device Gemini key store
     image.ts                     on-device photo resize, rotation fix and thumbnail
     auth.tsx, supabase.ts, database.types.ts
 ```

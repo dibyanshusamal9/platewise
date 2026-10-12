@@ -11,7 +11,7 @@ import { Skeleton } from './ui'
 const NAV: { to: '/' | '/weekly' | '/goals'; label: string; icon: LucideIcon }[] = [
   { to: '/', label: 'Today', icon: LayoutDashboard },
   { to: '/weekly', label: 'Week', icon: CalendarRange },
-  { to: '/goals', label: 'Targets', icon: Target },
+  { to: '/goals', label: 'Settings', icon: Target },
 ]
 
 /**
