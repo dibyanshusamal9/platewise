@@ -1,6 +1,6 @@
 // Server-only: talks to Gemini using the caller's own API key. The `.server.ts` suffix
 // makes TanStack Start refuse to bundle this file into client code.
-import { GoogleGenAI } from '@google/genai'
+import { GoogleGenAI, ThinkingLevel } from '@google/genai'
 import { z } from 'zod'
 
 const DEFAULT_MODEL = 'gemini-flash-latest'
@@ -161,30 +161,59 @@ const currentModel = () => process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL
 
 // ─── Resilience: Google's shared models regularly answer 503 "high demand" ────
 
-/** Lighter model tried when the main one stays busy. Override with GEMINI_FALLBACK_MODELS="a,b". */
+/** Lighter model tried when the main one is busy. Override with GEMINI_FALLBACK_MODELS="a,b". */
 const DEFAULT_FALLBACK_MODELS = ['gemini-flash-lite-latest']
-const ATTEMPTS_PER_MODEL = 2
-/** Stop starting new attempts after this long, so a request never hangs. */
-const TIME_BUDGET_MS = 45_000
+/** Full passes over the model list (pass 2 starts after a short backoff). */
+const PASSES = 2
+/** Never start a new attempt after this long, so the user isn't left waiting. */
+const TIME_BUDGET_MS = 30_000
+/** Give up on a single call after this long and move on (photos take longer to read). */
+const ATTEMPT_TIMEOUT_MS = { text: 12_000, photo: 20_000 } as const
+/** After a model says "busy", route new requests to the others first for this long. */
+const BUSY_COOLDOWN_MS = 60_000
 
 export const GEMINI_BUSY_MESSAGE =
   'Google’s Gemini servers are busy right now. This isn’t your key or your photo. Please try again in a minute.'
 
+/** model → time it last answered "busy". Lives as long as this server instance (reused between requests). */
+const busyUntil = new Map<string, number>()
+const markBusy = (model: string) => busyUntil.set(model, Date.now() + BUSY_COOLDOWN_MS)
+const isCoolingDown = (model: string) => (busyUntil.get(model) ?? 0) > Date.now()
+
+/** Configured models, with any that were recently busy moved to the back. */
 function modelChain(): string[] {
   const fallbacks = process.env.GEMINI_FALLBACK_MODELS?.split(',').map((m) => m.trim()).filter(Boolean)
-  return [...new Set([currentModel(), ...(fallbacks?.length ? fallbacks : DEFAULT_FALLBACK_MODELS)])]
+  const all = [...new Set([currentModel(), ...(fallbacks?.length ? fallbacks : DEFAULT_FALLBACK_MODELS)])]
+  return [...all.filter((m) => !isCoolingDown(m)), ...all.filter(isCoolingDown)]
 }
+
+/**
+ * Meal estimates don't need long reasoning, and Gemini 3+ models "think" by default,
+ * which is most of their latency. Keep it minimal for text and low for photos.
+ * Override with GEMINI_THINKING_LEVEL (MINIMAL | LOW | MEDIUM | HIGH), or "default" to leave it unset.
+ */
+function thinkingFor(kind: EstimateInput['kind']): ThinkingLevel | undefined {
+  const configured = process.env.GEMINI_THINKING_LEVEL?.trim().toUpperCase()
+  if (configured === 'DEFAULT') return undefined
+  if (configured && configured in ThinkingLevel) return ThinkingLevel[configured as keyof typeof ThinkingLevel]
+  return kind === 'photo' ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL
+}
+/** Models that rejected a thinking level (older or different families); we stop sending it to them. */
+const noThinkingConfig = new Set<string>()
 
 function statusOf(err: unknown): number {
   return typeof err === 'object' && err !== null && 'status' in err ? Number(err.status) || 0 : 0
 }
 
-/** Overloaded, Google-side 5xx, or a dropped connection: worth retrying after a pause. */
+const errorName = (err: unknown) => (err instanceof Error ? err.name : 'error')
+
+/** Overloaded, Google-side 5xx, our per-attempt timeout, or a dropped connection: worth trying elsewhere. */
 function isTransient(err: unknown): boolean {
   const status = statusOf(err)
   if (status === 500 || status === 502 || status === 503 || status === 504) return true
+  if (errorName(err) === 'TimeoutError' || errorName(err) === 'AbortError') return true
   const message = err instanceof Error ? err.message : ''
-  return /UNAVAILABLE|overloaded|high demand|DEADLINE_EXCEEDED|fetch failed|ECONNRESET|ETIMEDOUT/i.test(message)
+  return /UNAVAILABLE|overloaded|high demand|DEADLINE_EXCEEDED|aborted|timed? ?out|fetch failed|ECONNRESET|ETIMEDOUT/i.test(message)
 }
 
 /** ~1 s, then ~2 s, with jitter so many users don't retry in lockstep. */
@@ -252,19 +281,37 @@ function buildRequest(input: EstimateInput) {
   }
 }
 
-async function requestEstimate(input: EstimateInput, model: string, apiKey: string) {
+async function requestEstimate(input: EstimateInput, model: string, apiKey: string, timeoutMs: number) {
   const { systemInstruction, parts } = buildRequest(input)
-  const response = await clientFor(apiKey).models.generateContent({
-    model,
-    contents: [{ role: 'user', parts }],
-    config: {
-      systemInstruction,
-      responseMimeType: 'application/json',
-      responseJsonSchema: RESPONSE_JSON_SCHEMA,
-      // Temperature is left at the model default: Gemini 3+ models are tuned for
-      // 1.0 and can degrade when it is lowered. The schema provides determinism of shape.
-    },
-  })
+  const thinkingLevel = noThinkingConfig.has(model) ? undefined : thinkingFor(input.kind)
+  const call = (withThinking: boolean) =>
+    clientFor(apiKey).models.generateContent({
+      model,
+      contents: [{ role: 'user', parts }],
+      config: {
+        systemInstruction,
+        responseMimeType: 'application/json',
+        responseJsonSchema: RESPONSE_JSON_SCHEMA,
+        ...(withThinking && thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
+        abortSignal: AbortSignal.timeout(timeoutMs),
+        // Temperature is left at the model default: Gemini 3+ models are tuned for
+        // 1.0 and can degrade when it is lowered. The schema provides determinism of shape.
+      },
+    })
+
+  let response
+  try {
+    response = await call(true)
+  } catch (err) {
+    // A model that doesn't support this thinking level answers 400; drop the setting for it and retry once.
+    const message = err instanceof Error ? err.message : ''
+    if (thinkingLevel && statusOf(err) === 400 && /thinking/i.test(message)) {
+      noThinkingConfig.add(model)
+      response = await call(false)
+    } else {
+      throw err
+    }
+  }
   return GeminiEstimate.parse(parseModelJson(response.text))
 }
 
@@ -277,26 +324,31 @@ export async function estimateNutrition(input: EstimateInput | string, apiKey: s
   let lastError: unknown
   const startedAt = Date.now()
 
-  // Try the main model, then lighter fallbacks. Busy/5xx answers wait with jittered
-  // backoff before retrying; a garbled answer is retried once straight away.
-  models: for (const candidate of modelChain()) {
-    model = candidate
-    for (let attempt = 0; attempt < ATTEMPTS_PER_MODEL; attempt++) {
-      if (Date.now() - startedAt > TIME_BUDGET_MS) break models
+  // Walk the model list (recently-busy models last), moving to the next model as soon
+  // as one is busy or slow. A second pass, after a short backoff, gives busy models
+  // another chance. Everything stops at the time budget.
+  let chain = modelChain()
+  attempts: for (let pass = 0; pass < PASSES; pass++) {
+    if (pass > 0) await sleep(backoffMs(0))
+    for (const candidate of chain) {
+      const remaining = TIME_BUDGET_MS - (Date.now() - startedAt)
+      if (remaining < 2_000) break attempts
+      model = candidate
       try {
-        parsed = await requestEstimate(request, candidate, apiKey)
-        break models
+        parsed = await requestEstimate(request, candidate, apiKey, Math.min(ATTEMPT_TIMEOUT_MS[request.kind], remaining))
+        break attempts
       } catch (err) {
         // A bad key or exhausted quota won't fix itself on retry: tell the user straight away.
         const keyError = classifyGeminiError(err)
         if (keyError) throw keyError
         lastError = err
-        if (statusOf(err) === 404) continue models // model not available to this key: next one
-        if (isTransient(err)) {
-          console.warn(`[nutrition-ai] ${candidate} busy (attempt ${attempt + 1}): ${statusOf(err) || 'network'}`)
-          // Pause before retrying the same model; switch to a fallback (separate capacity) straight away.
-          if (attempt < ATTEMPTS_PER_MODEL - 1) await sleep(backoffMs(attempt))
+        if (statusOf(err) === 404) {
+          chain = chain.filter((m) => m !== candidate) // not available to this key: don't try it again
+        } else if (isTransient(err)) {
+          markBusy(candidate)
+          console.warn(`[nutrition-ai] ${candidate} busy/slow (pass ${pass + 1}): ${statusOf(err) || errorName(err)}`)
         }
+        // Anything else (e.g. a garbled answer) simply moves on to the next attempt.
       }
     }
   }

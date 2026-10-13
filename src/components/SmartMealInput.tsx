@@ -330,6 +330,19 @@ export function SmartMealInput() {
 }
 
 function EstimatingCard({ photoUrl }: { photoUrl?: string }) {
+  // Count seconds so a long wait explains itself instead of looking frozen.
+  const [seconds, setSeconds] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setSeconds((s) => s + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const status =
+    seconds >= 12
+      ? 'Still working. Gemini is very busy right now, trying a backup model…'
+      : seconds >= 5
+        ? 'Taking longer than usual. Google’s servers may be busy…'
+        : null
+
   return (
     <div className="card flex items-center gap-4 p-4">
       {photoUrl ? (
@@ -344,7 +357,7 @@ function EstimatingCard({ photoUrl }: { photoUrl?: string }) {
       )}
       <div className="flex-1 space-y-2">
         <p className="text-sm font-medium">{photoUrl ? 'Analyzing your plate…' : 'Estimating calories and macros…'}</p>
-        <Skeleton className="h-2.5 w-2/3" />
+        {status ? <p className="text-xs text-muted">{status}</p> : <Skeleton className="h-2.5 w-2/3" />}
       </div>
     </div>
   )
