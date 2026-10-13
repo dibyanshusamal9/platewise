@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowUp, Camera, Check, ChevronDown, ImagePlus, KeyRound, Sparkles, Undo2, X } from 'lucide-react'
+import { ArrowUp, Camera, Check, ChevronDown, ImagePlus, KeyRound, RotateCw, Sparkles, Undo2, X } from 'lucide-react'
 import type { Json, MealType } from '../lib/database.types'
 import { PhotoError, preparePhoto, type PreparedPhoto } from '../lib/image'
 import { MEAL_TYPES, fmtGrams, fmtKcal, fmtTime, mealTypeForTime, type Meal } from '../lib/nutrition'
@@ -309,6 +309,12 @@ export function SmartMealInput() {
         {error && !pending && (
           <div className="space-y-2">
             <ErrorNote>{error}</ErrorNote>
+            {/servers are busy/i.test(error) && canSubmit && (
+              <button type="button" onClick={() => submit()} className="btn-secondary px-3 py-1.5 text-[13px]">
+                <RotateCw className="size-4" aria-hidden />
+                Try again
+              </button>
+            )}
             {/Gemini API key/i.test(error) && (
               <Link to="/goals" hash="gemini-key" className="btn-secondary px-3 py-1.5 text-[13px]">
                 <KeyRound className="size-4" aria-hidden />

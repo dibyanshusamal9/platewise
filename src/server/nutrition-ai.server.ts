@@ -159,6 +159,38 @@ function classifyGeminiError(err: unknown): GeminiKeyError | null {
 
 const currentModel = () => process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL
 
+// ─── Resilience: Google's shared models regularly answer 503 "high demand" ────
+
+/** Lighter model tried when the main one stays busy. Override with GEMINI_FALLBACK_MODELS="a,b". */
+const DEFAULT_FALLBACK_MODELS = ['gemini-flash-lite-latest']
+const ATTEMPTS_PER_MODEL = 2
+/** Stop starting new attempts after this long, so a request never hangs. */
+const TIME_BUDGET_MS = 45_000
+
+export const GEMINI_BUSY_MESSAGE =
+  'Google’s Gemini servers are busy right now. This isn’t your key or your photo. Please try again in a minute.'
+
+function modelChain(): string[] {
+  const fallbacks = process.env.GEMINI_FALLBACK_MODELS?.split(',').map((m) => m.trim()).filter(Boolean)
+  return [...new Set([currentModel(), ...(fallbacks?.length ? fallbacks : DEFAULT_FALLBACK_MODELS)])]
+}
+
+function statusOf(err: unknown): number {
+  return typeof err === 'object' && err !== null && 'status' in err ? Number(err.status) || 0 : 0
+}
+
+/** Overloaded, Google-side 5xx, or a dropped connection: worth retrying after a pause. */
+function isTransient(err: unknown): boolean {
+  const status = statusOf(err)
+  if (status === 500 || status === 502 || status === 503 || status === 504) return true
+  const message = err instanceof Error ? err.message : ''
+  return /UNAVAILABLE|overloaded|high demand|DEADLINE_EXCEEDED|fetch failed|ECONNRESET|ETIMEDOUT/i.test(message)
+}
+
+/** ~1 s, then ~2 s, with jitter so many users don't retry in lockstep. */
+const backoffMs = (attempt: number) => 1000 * 2 ** attempt * (0.75 + Math.random() * 0.5)
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
 /** Cheap check that a key works with our model (model metadata only; no tokens used). */
 export async function verifyGeminiKey(apiKey: string): Promise<{ model: string }> {
   const model = currentModel()
@@ -240,23 +272,38 @@ async function requestEstimate(input: EstimateInput, model: string, apiKey: stri
 export async function estimateNutrition(input: EstimateInput | string, apiKey: string): Promise<NutritionEstimate> {
   if (!apiKey) throw new GeminiKeyError(GEMINI_KEY_MESSAGES.missing)
   const request: EstimateInput = typeof input === 'string' ? { kind: 'text', description: input } : input
-  const model = currentModel()
-
   let parsed: z.infer<typeof GeminiEstimate> | undefined
+  let model = currentModel()
   let lastError: unknown
-  // One retry covers the rare malformed / truncated response.
-  for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
-    try {
-      parsed = await requestEstimate(request, model, apiKey)
-    } catch (err) {
-      // A bad key or exhausted quota won't fix itself on retry: tell the user straight away.
-      const keyError = classifyGeminiError(err)
-      if (keyError) throw keyError
-      lastError = err
+  const startedAt = Date.now()
+
+  // Try the main model, then lighter fallbacks. Busy/5xx answers wait with jittered
+  // backoff before retrying; a garbled answer is retried once straight away.
+  models: for (const candidate of modelChain()) {
+    model = candidate
+    for (let attempt = 0; attempt < ATTEMPTS_PER_MODEL; attempt++) {
+      if (Date.now() - startedAt > TIME_BUDGET_MS) break models
+      try {
+        parsed = await requestEstimate(request, candidate, apiKey)
+        break models
+      } catch (err) {
+        // A bad key or exhausted quota won't fix itself on retry: tell the user straight away.
+        const keyError = classifyGeminiError(err)
+        if (keyError) throw keyError
+        lastError = err
+        if (statusOf(err) === 404) continue models // model not available to this key: next one
+        if (isTransient(err)) {
+          console.warn(`[nutrition-ai] ${candidate} busy (attempt ${attempt + 1}): ${statusOf(err) || 'network'}`)
+          // Pause before retrying the same model; switch to a fallback (separate capacity) straight away.
+          if (attempt < ATTEMPTS_PER_MODEL - 1) await sleep(backoffMs(attempt))
+        }
+      }
     }
   }
+
   if (!parsed) {
     console.error('[nutrition-ai] Gemini request failed', lastError)
+    if (isTransient(lastError)) throw new Error(GEMINI_BUSY_MESSAGE)
     throw new Error('Could not get a nutrition estimate right now. Please try again in a moment.')
   }
 
