@@ -299,6 +299,8 @@ export async function runCoachTurn(
   ]
 
   // Save both sides of the turn; the assistant row is stamped just after so ordering is stable.
+  // Every column is set on BOTH rows: in a multi-row insert PostgREST fills a column that one
+  // row omits with NULL (not the column default), which the NOT NULL columns reject.
   const now = Date.now()
   const { data: rows, error } = await ctx.supabase
     .from('chat_messages')
@@ -308,12 +310,15 @@ export async function runCoachTurn(
         role: 'user' as const,
         content: input.text,
         photo_thumbs: input.thumbnails as Json,
+        actions: [] as Json,
+        model: null,
         created_at: new Date(now).toISOString(),
       },
       {
         user_id: ctx.userId,
         role: 'assistant' as const,
         content: value.reply,
+        photo_thumbs: [] as Json,
         actions: [...proposals, ...memoryNotes] as unknown as Json,
         model,
         created_at: new Date(now + 1).toISOString(),
