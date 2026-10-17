@@ -5,8 +5,10 @@
 --
 -- Tables
 --   users        1:1 profile row for each auth.users row (auto-created by trigger)
---   daily_goals  versioned targets: the row with the latest effective_from <= a day applies to that day
---   meals        one row per logged meal, macros estimated by Gemini (or edited by the user)
+--   daily_goals    your targets; a new row each day you change them (reports use the latest)
+--   meals          one row per logged meal, macros estimated by Gemini (or edited by the user)
+--   user_memories  facts Saffron, the AI coach, remembers about you
+--   chat_messages  your conversation with Saffron, including proposed actions
 -- ════════════════════════════════════════════════════════════════════════════
 
 
@@ -138,10 +140,51 @@ create trigger meals_touch_updated_at
   for each row execute function public.touch_updated_at();
 
 
+-- ─── 4. user_memories: what Saffron (the AI coach) remembers about you ─────────
+-- Short facts the coach saves while chatting ("vegetarian", "allergic to peanuts").
+-- You can see and delete every one of them in Settings.
+create table if not exists public.user_memories (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null default auth.uid() references public.users (id) on delete cascade,
+  content     text not null check (char_length(content) between 2 and 300),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create index if not exists user_memories_user_idx on public.user_memories (user_id, created_at);
+
+drop trigger if exists user_memories_touch_updated_at on public.user_memories;
+create trigger user_memories_touch_updated_at
+  before update on public.user_memories
+  for each row execute function public.touch_updated_at();
+
+
+-- ─── 5. chat_messages: your conversation with Saffron ──────────────────────────
+-- Photos are analysed and then discarded; only ~10 KB thumbnails are kept.
+-- `actions` holds the coach's proposals (log/update a meal, change targets) and
+-- whether you applied them; nothing changes in your log until you tap Apply.
+create table if not exists public.chat_messages (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null default auth.uid() references public.users (id) on delete cascade,
+  role          text not null check (role in ('user', 'assistant')),
+  content       text not null default '' check (char_length(content) <= 8000),
+  photo_thumbs  jsonb not null default '[]'::jsonb
+                check (jsonb_typeof(photo_thumbs) = 'array' and jsonb_array_length(photo_thumbs) <= 4
+                       and char_length(photo_thumbs::text) <= 250000),
+  actions       jsonb not null default '[]'::jsonb check (jsonb_typeof(actions) = 'array'),
+  model         text,
+  created_at    timestamptz not null default now()
+);
+
+create index if not exists chat_messages_user_created_idx on public.chat_messages (user_id, created_at desc);
+
+
 -- ─── Row Level Security: every user sees and edits only their own rows ──────
 alter table public.users       enable row level security;
 alter table public.daily_goals enable row level security;
 alter table public.meals       enable row level security;
+alter table public.user_memories enable row level security;
+alter table public.chat_messages enable row level security;
 
 drop policy if exists "users: read own profile"   on public.users;
 drop policy if exists "users: update own profile" on public.users;
@@ -161,8 +204,20 @@ create policy "meals: owner has full access" on public.meals
   for all to authenticated
   using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 
+drop policy if exists "user_memories: owner has full access" on public.user_memories;
+create policy "user_memories: owner has full access" on public.user_memories
+  for all to authenticated
+  using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
+
+drop policy if exists "chat_messages: owner has full access" on public.chat_messages;
+create policy "chat_messages: owner has full access" on public.chat_messages
+  for all to authenticated
+  using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
+
 -- Explicit Data API grants (RLS above still restricts rows). Anonymous visitors get nothing.
-revoke all on public.users, public.daily_goals, public.meals from anon;
+revoke all on public.users, public.daily_goals, public.meals, public.user_memories, public.chat_messages from anon;
 grant select, update                 on public.users       to authenticated;
 grant select, insert, update, delete on public.daily_goals to authenticated;
 grant select, insert, update, delete on public.meals       to authenticated;
+grant select, insert, update, delete on public.user_memories to authenticated;
+grant select, insert, update, delete on public.chat_messages to authenticated;

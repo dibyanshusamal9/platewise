@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowUp, Camera, Check, ChevronDown, ImagePlus, KeyRound, RotateCw, Sparkles, Undo2, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, KeyRound, RotateCw, Sparkles, Undo2 } from 'lucide-react'
 import type { Json, MealType } from '../lib/database.types'
-import { PhotoError, preparePhoto, type PreparedPhoto } from '../lib/image'
 import { MEAL_TYPES, fmtGrams, fmtKcal, fmtTime, mealTypeForTime, type Meal } from '../lib/nutrition'
 import { useDeleteMeal, useLogMeal, useLogPhotoMeal } from '../lib/queries'
+import { AttachButtons, PhotoStrip, usePhotoAttachments } from './PhotoAttach'
 import { ErrorNote, MacroInline, Skeleton, Spinner } from './ui'
 
 const EXAMPLES = [
@@ -17,34 +17,31 @@ const EXAMPLES = [
 /**
  * One box, two ways in:
  *  - type what you ate → Gemini estimates from text
- *  - scan your plate (camera or gallery), optionally with a note → Gemini vision
- * Either way the meal is estimated, validated and saved without typing any numbers.
+ *  - scan your plate: 1–4 photos (camera or gallery), optionally with a note → Gemini vision.
+ *    Several photos are either one meal (plate + drink) or one meal per photo.
+ * Either way meals are estimated, validated and saved without typing any numbers.
  */
 export function SmartMealInput() {
   const [text, setText] = useState('')
   const [mealType, setMealType] = useState<MealType>(() => mealTypeForTime(new Date()))
-  const [lastLogged, setLastLogged] = useState<Meal | null>(null)
-  const [photo, setPhoto] = useState<PreparedPhoto | null>(null)
-  const [preparing, setPreparing] = useState(false)
-  const [photoError, setPhotoError] = useState<string | null>(null)
+  const [mode, setMode] = useState<'together' | 'separate'>('together')
+  const [lastLogged, setLastLogged] = useState<Meal[]>([])
   const [dragging, setDragging] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const cameraRef = useRef<HTMLInputElement>(null)
-  const galleryRef = useRef<HTMLInputElement>(null)
+  const attachments = usePhotoAttachments()
+  const { photos } = attachments
   const logMeal = useLogMeal()
   const logPhoto = useLogPhotoMeal()
 
   const trimmed = text.trim()
   const pending = logMeal.isPending || logPhoto.isPending
-  const canSubmit = !pending && !preparing && (photo !== null || trimmed.length >= 2)
-  const error = photoError ?? logPhoto.error?.message ?? logMeal.error?.message ?? null
+  const canSubmit = !pending && !attachments.preparing && (photos.length > 0 || trimmed.length >= 2)
+  const error = attachments.error ?? logPhoto.error?.message ?? logMeal.error?.message ?? null
 
-  // Free the preview's object URL when the photo is replaced or the component unmounts.
+  // Focus the note field once photos arrive.
   useEffect(() => {
-    return () => {
-      if (photo) URL.revokeObjectURL(photo.previewUrl)
-    }
-  }, [photo])
+    if (photos.length) textareaRef.current?.focus()
+  }, [photos.length])
 
   function resize() {
     const el = textareaRef.current
@@ -53,56 +50,39 @@ export function SmartMealInput() {
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }
 
-  async function attach(file: File | undefined | null) {
-    if (!file) return
-    setPhotoError(null)
+  function addPhotos(files: Iterable<File> | null | undefined) {
     logMeal.reset()
     logPhoto.reset()
-    setPreparing(true)
-    try {
-      setPhoto(await preparePhoto(file))
-      requestAnimationFrame(() => textareaRef.current?.focus())
-    } catch (err) {
-      setPhotoError(err instanceof PhotoError ? err.message : 'Could not open that photo.')
-    } finally {
-      setPreparing(false)
-    }
+    void attachments.add(files)
   }
 
-  function clearPhoto() {
-    setPhoto(null)
-    setPhotoError(null)
-    if (cameraRef.current) cameraRef.current.value = ''
-    if (galleryRef.current) galleryRef.current.value = ''
-  }
-
-  function onLogged(meal: Meal) {
-    setLastLogged(meal)
+  function onLogged(meals: Meal[]) {
+    setLastLogged(meals)
     setText('')
-    clearPhoto()
+    attachments.clear()
+    setMode('together')
     requestAnimationFrame(resize)
   }
 
   function submit(e?: FormEvent) {
     e?.preventDefault()
     if (!canSubmit) return
-    setLastLogged(null)
-    setPhotoError(null)
+    setLastLogged([])
+    attachments.setError(null)
     logMeal.reset()
     logPhoto.reset()
-    if (photo) {
+    if (photos.length) {
       logPhoto.mutate(
         {
-          imageBase64: photo.base64,
-          mimeType: photo.mimeType,
-          thumbnail: photo.thumbnail,
+          photos: photos.map(({ base64, mimeType, thumbnail }) => ({ base64, mimeType, thumbnail })),
+          mode,
           note: trimmed || undefined,
           mealType,
         },
         { onSuccess: onLogged },
       )
     } else {
-      logMeal.mutate({ description: trimmed, mealType }, { onSuccess: onLogged })
+      logMeal.mutate({ description: trimmed, mealType }, { onSuccess: (meal) => onLogged([meal]) })
     }
   }
 
@@ -111,18 +91,20 @@ export function SmartMealInput() {
   }
 
   function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
-    const image = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'))
-    if (image) {
+    const images = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'))
+    if (images.length) {
       e.preventDefault()
-      attach(image)
+      addPhotos(images)
     }
   }
 
   function onDrop(e: DragEvent<HTMLFormElement>) {
     e.preventDefault()
     setDragging(false)
-    attach([...e.dataTransfer.files].find((f) => f.type.startsWith('image/')))
+    addPhotos([...e.dataTransfer.files].filter((f) => f.type.startsWith('image/')))
   }
+
+  const several = photos.length > 1
 
   return (
     <section aria-labelledby="log-meal-heading" className="space-y-3">
@@ -145,67 +127,60 @@ export function SmartMealInput() {
           </h2>
         </div>
 
-        {/* Hidden pickers: `capture` opens the rear camera on phones; the other opens the gallery. */}
-        <input
-          ref={cameraRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="sr-only"
-          tabIndex={-1}
-          aria-hidden
-          onChange={(e) => attach(e.target.files?.[0])}
-        />
-        <input
-          ref={galleryRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-          className="sr-only"
-          tabIndex={-1}
-          aria-hidden
-          onChange={(e) => attach(e.target.files?.[0])}
-        />
+        {attachments.inputs}
 
         <div className="rounded-xl border border-line bg-surface-2 transition focus-within:border-energy focus-within:bg-surface">
-          {(photo || preparing) && (
-            <div className="flex items-center gap-3 px-3 pt-3">
-              <div className="relative size-16 shrink-0 overflow-hidden rounded-lg bg-line">
-                {photo ? (
-                  <img src={photo.previewUrl} alt="Your meal photo" className="size-full object-cover" />
-                ) : (
-                  <div className="shimmer size-full" />
-                )}
-                {photo && !pending && (
-                  <button
-                    type="button"
-                    onClick={clearPhoto}
-                    aria-label="Remove photo"
-                    className="absolute top-1 right-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white"
-                  >
-                    <X className="size-3" aria-hidden />
-                  </button>
-                )}
-              </div>
-              <p className="text-[13px] text-ink-2">
-                {preparing ? (
-                  'Preparing photo…'
-                ) : (
-                  <>
-                    <span className="font-medium text-ink">Photo ready.</span> Add a note for anything the camera
-                    can’t see: portions, oil, what you didn’t finish.
-                  </>
-                )}
-              </p>
+          {(photos.length > 0 || attachments.preparing) && (
+            <div className="space-y-3 px-3 pt-3">
+              <PhotoStrip attachments={attachments} disabled={pending} />
+              {several ? (
+                <fieldset>
+                  <legend className="mb-1.5 text-[13px] font-medium text-ink-2">These {photos.length} photos are…</legend>
+                  <div className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 p-1">
+                    {(
+                      [
+                        ['together', 'One meal'],
+                        ['separate', 'One meal per photo'],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <label
+                        key={value}
+                        className={`cursor-pointer rounded-lg py-1.5 text-center text-[13px] font-medium transition has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-energy ${
+                          mode === value ? 'bg-surface text-ink shadow-sm' : 'text-ink-2 hover:text-ink'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="photo-mode"
+                          value={value}
+                          checked={mode === value}
+                          onChange={() => setMode(value)}
+                          disabled={pending}
+                          className="sr-only"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ) : (
+                photos.length === 1 && (
+                  <p className="text-[13px] text-ink-2">
+                    <span className="font-medium text-ink">Photo ready.</span> Add more angles or dishes, or a note for
+                    anything the camera can’t see.
+                  </p>
+                )
+              )}
             </div>
           )}
 
           <label htmlFor="meal-text" className="sr-only">
-            {photo ? 'Optional note about the photo' : 'Describe your meal'}
+            {photos.length ? 'Optional note about the photos' : 'Describe your meal'}
           </label>
           <textarea
             id="meal-text"
             ref={textareaRef}
-            rows={photo ? 1 : 2}
+            rows={photos.length ? 1 : 2}
             value={text}
             maxLength={500}
             disabled={pending}
@@ -215,36 +190,22 @@ export function SmartMealInput() {
             }}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            placeholder={photo ? 'Add a note (optional)' : 'e.g. 2 scrambled eggs and buttered toast'}
+            placeholder={
+              photos.length
+                ? several && mode === 'separate'
+                  ? 'Add a note for all photos (optional)'
+                  : 'Add a note (optional)'
+                : 'e.g. 2 scrambled eggs and buttered toast'
+            }
             className="block w-full resize-none bg-transparent px-3 pt-3 text-base leading-relaxed text-ink outline-none placeholder:text-muted sm:text-[15px]"
           />
 
           <div className="flex items-center justify-between gap-2 p-2 pt-1">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => cameraRef.current?.click()}
-                disabled={pending || preparing}
-                className="btn-ghost gap-1.5 px-2.5 py-2 text-[13px]"
-              >
-                <Camera className="size-4.5" aria-hidden />
-                Scan plate
-              </button>
-              <button
-                type="button"
-                onClick={() => galleryRef.current?.click()}
-                disabled={pending || preparing}
-                aria-label="Choose a photo from your gallery"
-                title="Choose from gallery"
-                className="icon-btn"
-              >
-                <ImagePlus className="size-4.5" aria-hidden />
-              </button>
-            </div>
+            <AttachButtons attachments={attachments} disabled={pending} />
             <button
               type="submit"
               disabled={!canSubmit}
-              aria-label={photo ? 'Analyze photo and log meal' : 'Log meal'}
+              aria-label={photos.length ? 'Analyze photos and log' : 'Log meal'}
               className="btn-primary size-10 shrink-0 rounded-full p-0"
             >
               {pending ? <Spinner /> : <ArrowUp className="size-5" aria-hidden />}
@@ -276,10 +237,10 @@ export function SmartMealInput() {
               </label>
             ))}
           </fieldset>
-          <p className="hidden text-xs text-muted sm:block">Enter to log · paste or drop a photo</p>
+          <p className="hidden text-xs text-muted sm:block">Enter to log · up to 4 photos · paste or drop</p>
         </div>
 
-        {!trimmed && !photo && !pending && !preparing && (
+        {!trimmed && !photos.length && !pending && !attachments.preparing && (
           <div className="mt-4 border-t border-line pt-3">
             <p className="mb-2 text-xs font-medium text-muted">Try one</p>
             <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
@@ -304,8 +265,13 @@ export function SmartMealInput() {
         )}
       </form>
 
-      <div aria-live="polite">
-        {pending && <EstimatingCard photoUrl={logPhoto.isPending ? photo?.previewUrl : undefined} />}
+      <div aria-live="polite" className="space-y-3">
+        {pending && (
+          <EstimatingCard
+            photoUrl={logPhoto.isPending ? photos[0]?.previewUrl : undefined}
+            count={logPhoto.isPending && mode === 'separate' ? photos.length : 1}
+          />
+        )}
         {error && !pending && (
           <div className="space-y-2">
             <ErrorNote>{error}</ErrorNote>
@@ -323,13 +289,20 @@ export function SmartMealInput() {
             )}
           </div>
         )}
-        {lastLogged && !pending && <LoggedCard meal={lastLogged} onUndone={() => setLastLogged(null)} />}
+        {!pending &&
+          lastLogged.map((meal) => (
+            <LoggedCard
+              key={meal.id}
+              meal={meal}
+              onUndone={() => setLastLogged((list) => list.filter((m) => m.id !== meal.id))}
+            />
+          ))}
       </div>
     </section>
   )
 }
 
-function EstimatingCard({ photoUrl }: { photoUrl?: string }) {
+function EstimatingCard({ photoUrl, count }: { photoUrl?: string; count: number }) {
   // Count seconds so a long wait explains itself instead of looking frozen.
   const [seconds, setSeconds] = useState(0)
   useEffect(() => {
@@ -337,9 +310,9 @@ function EstimatingCard({ photoUrl }: { photoUrl?: string }) {
     return () => clearInterval(id)
   }, [])
   const status =
-    seconds >= 12
+    seconds >= 12 * Math.max(1, count)
       ? 'Still working. Gemini is very busy right now, trying a backup model…'
-      : seconds >= 5
+      : seconds >= 5 * Math.max(1, count)
         ? 'Taking longer than usual. Google’s servers may be busy…'
         : null
 
@@ -356,7 +329,9 @@ function EstimatingCard({ photoUrl }: { photoUrl?: string }) {
         </div>
       )}
       <div className="flex-1 space-y-2">
-        <p className="text-sm font-medium">{photoUrl ? 'Analyzing your plate…' : 'Estimating calories and macros…'}</p>
+        <p className="text-sm font-medium">
+          {photoUrl ? (count > 1 ? `Analyzing ${count} meals…` : 'Analyzing your plate…') : 'Estimating calories and macros…'}
+        </p>
         {status ? <p className="text-xs text-muted">{status}</p> : <Skeleton className="h-2.5 w-2/3" />}
       </div>
     </div>

@@ -131,7 +131,7 @@ Every user connects their own free Gemini API key, so usage and quota are theirs
 
 ### Scan from plate
 
-Tap **Scan plate** to take a photo, or use the gallery button. On a computer you can also paste or drag a photo in. Optionally add a note for what the camera can't see ("2 rotis", "no ghee", "ate half"); the note overrides what Gemini sees. A photo of a **nutrition facts label** works too: Gemini reads the per-serving values, and the note can say how many servings.
+Tap **Scan plate** to take a photo, or use the gallery button to pick **up to 4 photos at once**. On a computer you can also paste or drag photos in. With several photos, choose **One meal** (e.g. plate + drink, or two angles: one combined estimate) or **One meal per photo** (each becomes its own meal). Optionally add a note for what the camera can't see ("2 rotis", "no ghee", "ate half"); the note overrides what Gemini sees. A photo of a **nutrition facts label** works too: Gemini reads the per-serving values, and the note can say how many servings.
 
 - The phone shrinks the photo to at most 1280 px (a 4–8 MB photo becomes roughly 150–400 KB) and fixes its rotation before upload.
 - The full photo is used only for the estimate and is never stored. Each meal keeps just a ~10 KB thumbnail in `meals.photo_thumb`, which is protected by the same RLS rules as the meal.
@@ -140,6 +140,20 @@ Tap **Scan plate** to take a photo, or use the gallery button. On a computer you
 - **Android:** this needs no new APK. The app uses the system camera through the WebView, so it reaches installed phones with a normal web deploy.
 
 The system prompt and the JSON schema Gemini must follow are in [`src/server/nutrition-ai.server.ts`](src/server/nutrition-ai.server.ts) (`NUTRITION_SYSTEM_PROMPT`).
+
+## Saffron, the AI coach
+
+The **Saffron** tab is a chat with a nutrition coach that knows your data (it uses your own Gemini key):
+
+- **Plans meals and portions** around your targets, what you've eaten today and the last 7 days ("You have 640 kcal and 38 g protein left today").
+- **Explains the calories in photos**: send up to 4 photos and it breaks the meal down item by item.
+- **Consults, then acts on a tap.** When it suggests a change, it shows a card with an **Apply** button: *log a meal*, *edit a meal* (the card shows the real meal and before → after values, taken from your log rather than the AI's wording) or *update your targets*. Nothing changes until you tap Apply; you can also Dismiss.
+- **Remembers key facts** you tell it (diet, allergies, schedule, goals), shown as "Remembered: …" chips. See, add or delete them in **Settings → What Saffron remembers**. Ask it to forget something and it will.
+- The conversation is saved in your account, so it follows you across devices. Photos are analysed then discarded; only small thumbnails are kept.
+
+Safety: the coach isn't a doctor. It won't suggest targets below 1,200/1,500 kcal or losing more than ~1 kg a week, and it responds with care (and suggests professional support) to signs of disordered eating. Every proposal is validated on the server and again before it's applied, and all writes go through Row Level Security as you.
+
+**Already set up?** Re-run `supabase/schema.sql` to add the `user_memories` and `chat_messages` tables (safe to re-run).
 
 ## Project layout
 
@@ -162,7 +176,11 @@ src/
     UpdateNotices.tsx            reload toast, update dialog, "Update required", Check for updates
     SmartMealInput.tsx           the one-box AI logger: type it or scan your plate (with Undo)
     Dashboard.tsx                calorie ring, remaining, deficit/surplus, macro meters
-    WeeklyReport.tsx             7-day metrics, bar chart, macro split, editable timeline
+    WeeklyReport.tsx             7-day metrics (vs current targets), bar chart, macro split, editable timeline
+    Coach.tsx                    Saffron chat: messages, photo questions, Apply/Dismiss action cards
+    MemorySettings.tsx           what Saffron remembers (view, add, delete)
+    PhotoAttach.tsx              shared camera/gallery (multi-select), paste, drop and previews
+    RichText.tsx                 injection-safe formatting for AI replies
     MealTimeline.tsx             meal rows with inline edit (+ AI re-estimate) and delete
     GoalsSetup.tsx               Settings page: targets + TDEE calculator, Gemini key, app updates
     GeminiKeySettings.tsx        bring-your-own Gemini key: first-run setup and settings card
@@ -170,6 +188,10 @@ src/
   server/
     meals.functions.ts           logMeal / logMealFromPhoto / estimateMeal + auth middleware
     meals.server.ts              server-only insert helper
+    coach.functions.ts           sendCoachMessage server function
+    coach.server.ts              Saffron prompt, context from your data, proposal validation, memory
+    middleware.ts                sign-in check + per-user Gemini key, shared by all server functions
+    schemas.ts                   shared photo validation (1–4 photos, size limits)
     nutrition-ai.server.ts       Gemini prompts (text + photo), schema, validation
     supabase.server.ts           per-request, user-scoped Supabase client
   lib/
@@ -178,11 +200,13 @@ src/
     updates.ts                   update store: service worker + native-shell version checks
     gemini-key.ts                per-user, on-device Gemini key store
     image.ts                     on-device photo resize, rotation fix and thumbnail
+    coach.ts                     Saffron action types + validation (shared by server and app)
+    coach-queries.ts             chat, memory and Apply hooks
     auth.tsx, supabase.ts, database.types.ts
 ```
 
 ## Design notes
 
-- **Goals are versioned.** Each save writes a `daily_goals` row with `effective_from = today`. Every past day is scored against the targets that were active on that day, so changing targets mid-week doesn't rewrite last week's report.
+- **Reports use your current targets.** Each save writes a `daily_goals` row for today (keeping a history), but the dashboard and the whole weekly report always score every day against your **latest** TDEE and calorie target, so changing them recalculates averages, deficit and days-on-target straight away.
 - **Days follow the user's local calendar.** Meals are stored as `timestamptz`, and "today" and the 7-day window are calculated in the browser's time zone.
 - **Target vs TDEE.** *Remaining* is measured against your calorie target. *Deficit/surplus* is measured against TDEE (maintenance). If you set them equal, the two numbers match.

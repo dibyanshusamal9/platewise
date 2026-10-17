@@ -85,18 +85,40 @@ export function useLogMeal() {
   })
 }
 
+/**
+ * Scan from plate with 1–4 photos.
+ *  - "together": all photos are one meal (plate + drink, or two angles) → one estimate
+ *  - "separate": each photo is its own meal → one estimate per photo
+ * Always resolves to the list of saved meals.
+ */
 export function useLogPhotoMeal() {
   const user = useUser()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (input: {
-      imageBase64: string
-      mimeType: 'image/jpeg'
-      thumbnail: string
+    mutationFn: async (input: {
+      photos: { base64: string; mimeType: 'image/jpeg'; thumbnail: string }[]
+      mode: 'together' | 'separate'
       note?: string
       mealType: MealType
-    }) => logMealFromPhoto({ data: { ...input, eatenAt: new Date().toISOString() } }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.meals(user.id) }),
+    }): Promise<Meal[]> => {
+      const eatenAt = new Date().toISOString()
+      const send = (photos: typeof input.photos) =>
+        logMealFromPhoto({
+          data: {
+            images: photos.map(({ base64, mimeType }) => ({ base64, mimeType })),
+            thumbnail: photos[0].thumbnail,
+            note: input.note,
+            mealType: input.mealType,
+            eatenAt,
+          },
+        })
+      if (input.mode === 'together' || input.photos.length === 1) return [await send(input.photos)]
+      // One at a time: friendlier to the free Gemini rate limit than firing all at once.
+      const saved: Meal[] = []
+      for (const photo of input.photos) saved.push(await send([photo]))
+      return saved
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.meals(user.id) }),
   })
 }
 

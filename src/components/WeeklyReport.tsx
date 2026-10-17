@@ -19,6 +19,7 @@ import {
   fmtKcal,
   fmtPct,
   fmtSigned,
+  goalForDay,
   lastSevenDayKeys,
   summarizeDays,
   type DaySummary,
@@ -37,8 +38,14 @@ export function WeeklyReport() {
   const meals = useMealsBetween(dayKeys[0], todayKey)
 
   const days = useMemo(
-    () => (goals.data && meals.data ? summarizeDays(dayKeys, meals.data, goals.data) : []),
-    [dayKeys, goals.data, meals.data],
+    () => {
+      if (!goals.data || !meals.data) return []
+      // Score every day against the CURRENT targets, so changing your TDEE or calorie
+      // target immediately recalculates the whole week (averages, deficit, days on target).
+      const current = goalForDay(goals.data, todayKey)
+      return summarizeDays(dayKeys, meals.data, current ? [current] : [])
+    },
+    [dayKeys, goals.data, meals.data, todayKey],
   )
 
   if (goals.isPending || meals.isPending) return <ReportSkeleton />

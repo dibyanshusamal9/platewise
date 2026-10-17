@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { CalendarRange, LayoutDashboard, LogOut, Target, type LucideIcon } from 'lucide-react'
+import { CalendarRange, Flower2, LayoutDashboard, LogOut, Settings, type LucideIcon } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useNativeBackButton, useUpdateChecks } from '../lib/updates'
 import { AuthScreen } from './AuthScreen'
@@ -8,10 +8,11 @@ import { UpdateNotices } from './UpdateNotices'
 import { Logo } from './Logo'
 import { Skeleton } from './ui'
 
-const NAV: { to: '/' | '/weekly' | '/goals'; label: string; icon: LucideIcon }[] = [
+const NAV: { to: '/' | '/weekly' | '/coach' | '/goals'; label: string; icon: LucideIcon }[] = [
   { to: '/', label: 'Today', icon: LayoutDashboard },
   { to: '/weekly', label: 'Week', icon: CalendarRange },
-  { to: '/goals', label: 'Settings', icon: Target },
+  { to: '/coach', label: 'Saffron', icon: Flower2 },
+  { to: '/goals', label: 'Settings', icon: Settings },
 ]
 
 /**
@@ -80,7 +81,7 @@ function Shell({ children }: { children: ReactNode }) {
         aria-label="Main"
         className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-surface/90 pb-[var(--safe-bottom)] backdrop-blur-md sm:hidden"
       >
-        <div className="grid grid-cols-3">
+        <div className="grid grid-cols-4">
           {NAV.map(({ to, label, icon: Icon }) => (
             <Link
               key={to}

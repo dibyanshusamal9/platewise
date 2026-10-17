@@ -145,6 +145,50 @@ export type Database = {
         }
         Relationships: []
       }
+      user_memories: {
+        Row: {
+          id: string
+          user_id: string
+          content: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id?: string
+          content: string
+        }
+        Update: {
+          content?: string
+        }
+        Relationships: []
+      }
+      chat_messages: {
+        Row: {
+          id: string
+          user_id: string
+          role: 'user' | 'assistant'
+          content: string
+          photo_thumbs: Json
+          actions: Json
+          model: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id?: string
+          role: 'user' | 'assistant'
+          content?: string
+          photo_thumbs?: Json
+          actions?: Json
+          model?: string | null
+          created_at?: string
+        }
+        Update: {
+          actions?: Json
+        }
+        Relationships: []
+      }
     }
     Views: { [_ in never]: never }
     Functions: { [_ in never]: never }

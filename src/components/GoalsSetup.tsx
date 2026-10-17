@@ -19,6 +19,7 @@ import {
 import { useGoals, useProfile, useSaveGoals, useTodayKey } from '../lib/queries'
 import { AppUpdatesCard } from './UpdateNotices'
 import { GeminiKeySettings } from './GeminiKeySettings'
+import { MemorySettings } from './MemorySettings'
 import { ErrorNote, Skeleton, Spinner, Swatch } from './ui'
 
 /** Limits mirror the CHECK constraints in supabase/schema.sql. */
@@ -116,7 +117,7 @@ function GoalsEditor({ current, profile, todayKey }: { current: DailyGoal | null
       <header className="mb-2">
         <h1 className="text-2xl font-semibold tracking-tight">Daily targets</h1>
         <p className="mt-0.5 text-sm text-muted">
-          Changes apply from today. Earlier days keep the targets they had, so past reports stay accurate.
+          Your dashboard and the whole weekly report always use your current targets, so changes apply everywhere straight away.
         </p>
       </header>
 
@@ -236,6 +237,7 @@ function GoalsEditor({ current, profile, todayKey }: { current: DailyGoal | null
       </div>
 
       <GeminiKeySettings variant="settings" />
+      <MemorySettings />
       <AppUpdatesCard />
     </div>
   )

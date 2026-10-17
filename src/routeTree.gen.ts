@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CoachRouteImport } from './routes/coach'
 import { Route as GoalsRouteImport } from './routes/goals'
 import { Route as WeeklyRouteImport } from './routes/weekly'
 import { Route as ApiAppVersionRouteImport } from './routes/api/app-version'
@@ -17,6 +18,11 @@ import { Route as ApiAppVersionRouteImport } from './routes/api/app-version'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CoachRoute = CoachRouteImport.update({
+  id: '/coach',
+  path: '/coach',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GoalsRoute = GoalsRouteImport.update({
@@ -37,12 +43,14 @@ const ApiAppVersionRoute = ApiAppVersionRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/coach': typeof CoachRoute
   '/goals': typeof GoalsRoute
   '/weekly': typeof WeeklyRoute
   '/api/app-version': typeof ApiAppVersionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/coach': typeof CoachRoute
   '/goals': typeof GoalsRoute
   '/weekly': typeof WeeklyRoute
   '/api/app-version': typeof ApiAppVersionRoute
@@ -50,20 +58,22 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/coach': typeof CoachRoute
   '/goals': typeof GoalsRoute
   '/weekly': typeof WeeklyRoute
   '/api/app-version': typeof ApiAppVersionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/goals' | '/weekly' | '/api/app-version'
+  fullPaths: '/' | '/coach' | '/goals' | '/weekly' | '/api/app-version'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/goals' | '/weekly' | '/api/app-version'
-  id: '__root__' | '/' | '/goals' | '/weekly' | '/api/app-version'
+  to: '/' | '/coach' | '/goals' | '/weekly' | '/api/app-version'
+  id: '__root__' | '/' | '/coach' | '/goals' | '/weekly' | '/api/app-version'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CoachRoute: typeof CoachRoute
   GoalsRoute: typeof GoalsRoute
   WeeklyRoute: typeof WeeklyRoute
   ApiAppVersionRoute: typeof ApiAppVersionRoute
@@ -76,6 +86,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/coach': {
+      id: '/coach'
+      path: '/coach'
+      fullPath: '/coach'
+      preLoaderRoute: typeof CoachRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/goals': {
@@ -104,6 +121,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CoachRoute: CoachRoute,
   GoalsRoute: GoalsRoute,
   WeeklyRoute: WeeklyRoute,
   ApiAppVersionRoute: ApiAppVersionRoute,

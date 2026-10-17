@@ -36,6 +36,10 @@
   --good: #006300;
   --critical: #c73232;
   --critical-wash: #fbeaea;
+
+  /* Saffron, the AI coach: avatar gradient only (never used for data) */
+  --saffron: #f5a524;
+  --saffron-deep: #d9622b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -63,6 +67,9 @@
     --good: #2fbf2f;
     --critical: #ef7a7a;
     --critical-wash: #3a1d1d;
+
+    --saffron: #e7951a;
+    --saffron-deep: #c4521f;
   }
 }
 
