@@ -83,7 +83,15 @@ export interface MealSnapshot {
 
 /** What is stored in chat_messages.actions. */
 export type StoredAction =
-  | (Proposal & { id: string; status: ActionStatus; applied_meal_id?: string; target?: MealSnapshot })
+  | (Proposal & {
+      id: string
+      status: ActionStatus
+      applied_meal_id?: string
+      /** update_meal: the real meal it points at. */
+      target?: MealSnapshot
+      /** log_meal: thumbnail of the photo this meal came from, saved with the meal. */
+      photo_thumb?: string
+    })
   | { id: string; type: 'remembered' | 'forgot'; content: string; status: 'applied' }
 
 export function parseStoredActions(value: unknown): StoredAction[] {

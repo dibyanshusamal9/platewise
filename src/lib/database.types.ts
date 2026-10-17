@@ -163,10 +163,30 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_conversations: {
+        Row: {
+          id: string
+          user_id: string
+          title: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id?: string
+          title?: string
+        }
+        Update: {
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       chat_messages: {
         Row: {
           id: string
           user_id: string
+          conversation_id?: string
           role: 'user' | 'assistant'
           content: string
           photo_thumbs: Json
@@ -177,6 +197,7 @@ export type Database = {
         Insert: {
           id?: string
           user_id?: string
+          conversation_id?: string
           role: 'user' | 'assistant'
           content?: string
           photo_thumbs?: Json

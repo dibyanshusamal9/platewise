@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowUp, Brain, CircleCheck, Flower2, KeyRound, Pencil, RotateCw, Target, Trash2, UtensilsCrossed } from 'lucide-react'
+import { ArrowUp, Brain, CircleCheck, Flower2, KeyRound, MessagesSquare, Pencil, RotateCw, SquarePen, Target, Trash2, UtensilsCrossed } from 'lucide-react'
 import { useUser } from '../lib/auth'
 import { COACH_NAME, SUGGESTED_PROMPTS, parseStoredActions, type StoredAction } from '../lib/coach'
 import {
   useApplyCoachAction,
+  chatsUnavailable,
   useChatMessages,
-  useClearChat,
+  useConversations,
+  useDeleteConversation,
   useDismissCoachAction,
+  useOpenConversation,
   useSendCoachMessage,
+  type ChatConversation,
   type ChatMessage,
 } from '../lib/coach-queries'
 import { useGeminiKey } from '../lib/gemini-key'
@@ -33,14 +37,23 @@ export function CoachAvatar({ className = 'size-9' }: { className?: string }) {
 export function Coach() {
   const user = useUser()
   const geminiKey = useGeminiKey(user.id)
-  const messages = useChatMessages()
+  const [openId, setOpenId] = useOpenConversation()
+  const conversations = useConversations()
+  // Older database without multiple chats: one chat, no New chat / Your chats buttons.
+  const singleChat = chatsUnavailable(conversations)
+  const messages = useChatMessages(openId, singleChat)
   const send = useSendCoachMessage()
-  const clear = useClearChat()
-  const [confirmClear, setConfirmClear] = useState(false)
+  const [showChats, setShowChats] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
 
   const list = messages.data ?? []
   const pending = send.isPending ? send.variables : undefined
+  const current = conversations.data?.find((c) => c.id === openId)
+
+  // The open chat was deleted (here or on another device): fall back to a fresh one.
+  useEffect(() => {
+    if (openId && conversations.data && !conversations.data.some((c) => c.id === openId)) setOpenId(null)
+  }, [openId, conversations.data, setOpenId])
 
   // Keep the newest message in view: jump there on first load, glide for new messages.
   const scrolledOnce = useRef(false)
@@ -48,55 +61,89 @@ export function Coach() {
     if (!list.length && !send.isPending) return
     endRef.current?.scrollIntoView({ behavior: scrolledOnce.current ? 'smooth' : 'auto', block: 'end' })
     scrolledOnce.current = true
-  }, [list.length, send.isPending])
+  }, [list.length, send.isPending, openId])
+
+  function sendMessage(input: { text: string; photos: { base64: string; mimeType: 'image/jpeg'; thumbnail: string }[] }) {
+    send.mutate(
+      { ...input, conversationId: openId },
+      // The first message of a new chat creates it; keep it open.
+      { onSuccess: (res) => res.conversationId && setOpenId(res.conversationId) },
+    )
+  }
+
+  function newChat() {
+    send.reset()
+    setOpenId(null)
+    setShowChats(false)
+  }
 
   return (
     <div className="flex min-h-[calc(100dvh-11rem)] flex-col gap-4">
       <header className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <CoachAvatar className="size-11" />
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight">{COACH_NAME}</h1>
-            <p className="text-[13px] text-muted">Your nutrition coach · plans, portions & photo explanations</p>
+            <p className="truncate text-[13px] text-muted">
+              {current ? current.title : 'Your nutrition coach · plans, portions & photo explanations'}
+            </p>
           </div>
         </div>
-        {list.length > 0 &&
-          (confirmClear ? (
-            <div className="flex items-center gap-1">
-              <button type="button" className="btn-ghost px-2.5 py-1.5 text-[13px]" onClick={() => setConfirmClear(false)}>
-                Keep
-              </button>
-              <button
-                type="button"
-                className="btn bg-critical px-2.5 py-1.5 text-[13px] text-page"
-                disabled={clear.isPending}
-                onClick={() => clear.mutate(undefined, { onSettled: () => setConfirmClear(false) })}
-              >
-                {clear.isPending && <Spinner className="size-3.5" />}
-                Clear chat
-              </button>
-            </div>
-          ) : (
-            <button type="button" className="icon-btn" aria-label="Clear chat" title="Clear chat" onClick={() => setConfirmClear(true)}>
-              <Trash2 className="size-4" aria-hidden />
-            </button>
-          ))}
+        {!singleChat && (
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            className={`icon-btn ${showChats ? 'bg-surface-2 text-ink' : ''}`}
+            aria-label="Your chats"
+            aria-expanded={showChats}
+            title="Your chats"
+            onClick={() => setShowChats((v) => !v)}
+          >
+            <MessagesSquare className="size-4.5" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="btn-secondary gap-1.5 px-3 py-1.5 text-[13px]"
+            onClick={newChat}
+            disabled={send.isPending || (!openId && !showChats)}
+            title="Start a new chat"
+          >
+            <SquarePen className="size-4" aria-hidden />
+            New chat
+          </button>
+        </div>
+        )}
       </header>
 
+      {showChats && !singleChat && (
+        <ChatList
+          conversations={conversations.data ?? []}
+          loading={conversations.isPending}
+          openId={openId}
+          onOpen={(id) => {
+            send.reset()
+            setOpenId(id)
+            setShowChats(false)
+          }}
+          onNew={newChat}
+          onDeleted={(id) => {
+            if (id === openId) setOpenId(null)
+          }}
+        />
+      )}
+
       <div className="flex-1 space-y-4" aria-live="polite">
-        {messages.isPending ? (
+        {openId && messages.isPending ? (
           <div className="space-y-3">
             <Skeleton className="ml-auto h-12 w-2/3" />
             <Skeleton className="h-24 w-4/5" />
           </div>
         ) : messages.isError ? (
-          <ErrorNote>Couldn’t load your conversation: {messages.error.message}</ErrorNote>
+          <ErrorNote>Couldn’t load this chat: {messages.error.message}</ErrorNote>
         ) : list.length === 0 && !pending ? (
-          <Welcome onPick={(text) => send.mutate({ text, photos: [] })} disabled={!geminiKey || send.isPending} />
+          <Welcome onPick={(text) => sendMessage({ text, photos: [] })} disabled={!geminiKey || send.isPending} />
         ) : (
-          list.map((m, i) => (
-            <MessageBubble key={m.id} message={m} previous={list[i - 1]} />
-          ))
+          list.map((m, i) => <MessageBubble key={m.id} message={m} previous={list[i - 1]} />)
         )}
 
         {pending && (
@@ -121,7 +168,7 @@ export function Coach() {
           <div className="space-y-2">
             <ErrorNote>{send.error.message}</ErrorNote>
             <div className="flex flex-wrap gap-2">
-              {/servers are busy|couldn.t answer/i.test(send.error.message) && send.variables && (
+              {/servers are busy|couldn.t answer|couldn.t be saved/i.test(send.error.message) && send.variables && (
                 <button type="button" className="btn-secondary px-3 py-1.5 text-[13px]" onClick={() => send.mutate(send.variables!)}>
                   <RotateCw className="size-4" aria-hidden />
                   Try again
@@ -139,8 +186,119 @@ export function Coach() {
         <div ref={endRef} />
       </div>
 
-      {geminiKey ? <Composer onSend={(input) => send.mutate(input)} busy={send.isPending} /> : <GeminiKeySettings variant="setup" />}
+      {geminiKey ? <Composer onSend={sendMessage} busy={send.isPending} /> : <GeminiKeySettings variant="setup" />}
     </div>
+  )
+}
+
+function relativeDay(iso: string) {
+  const d = new Date(iso)
+  const today = new Date()
+  const days = Math.round(
+    (new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() -
+      new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) /
+      86_400_000,
+  )
+  if (days === 0) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: 'long' })
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function ChatList({
+  conversations,
+  loading,
+  openId,
+  onOpen,
+  onNew,
+  onDeleted,
+}: {
+  conversations: ChatConversation[]
+  loading: boolean
+  openId: string | null
+  onOpen: (id: string) => void
+  onNew: () => void
+  onDeleted: (id: string) => void
+}) {
+  const remove = useDeleteConversation()
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+
+  return (
+    <section className="card overflow-hidden" aria-label="Your chats">
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <h2 className="text-sm font-semibold">Your chats</h2>
+        <button type="button" className="btn-ghost -mr-2 gap-1.5 px-2.5 py-1.5 text-[13px]" onClick={onNew}>
+          <SquarePen className="size-4" aria-hidden />
+          New chat
+        </button>
+      </div>
+      {loading ? (
+        <div className="p-4">
+          <Skeleton className="h-10" />
+        </div>
+      ) : conversations.length === 0 ? (
+        <p className="px-4 py-5 text-center text-sm text-muted">No chats yet. Ask {COACH_NAME} something to start one.</p>
+      ) : (
+        <ul className="max-h-80 divide-y divide-line overflow-y-auto">
+          {conversations.map((c) => (
+            <li key={c.id} className={`flex items-center gap-2 px-2 ${c.id === openId ? 'bg-surface-2' : ''}`}>
+              {confirmId === c.id ? (
+                <div className="flex flex-1 items-center justify-between gap-2 px-2 py-2">
+                  <span className="truncate text-[13px] text-ink-2">Delete “{c.title}”?</span>
+                  <div className="flex shrink-0 gap-1">
+                    <button type="button" className="btn-ghost px-2.5 py-1 text-[13px]" onClick={() => setConfirmId(null)}>
+                      Keep
+                    </button>
+                    <button
+                      type="button"
+                      className="btn bg-critical px-2.5 py-1 text-[13px] text-page"
+                      disabled={remove.isPending}
+                      onClick={() =>
+                        remove.mutate(c.id, {
+                          onSuccess: () => onDeleted(c.id),
+                          onSettled: () => setConfirmId(null),
+                        })
+                      }
+                    >
+                      {remove.isPending && <Spinner className="size-3.5" />}
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg px-2 py-2.5 text-left hover:bg-surface-2"
+                    onClick={() => onOpen(c.id)}
+                    aria-current={c.id === openId || undefined}
+                  >
+                    <span className="truncate text-sm font-medium">{c.title}</span>
+                    <span className="shrink-0 text-xs text-muted">{relativeDay(c.updated_at)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn size-8 shrink-0 hover:text-critical"
+                    aria-label={`Delete chat: ${c.title}`}
+                    onClick={() => setConfirmId(c.id)}
+                  >
+                    <Trash2 className="size-4" aria-hidden />
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {remove.isError && (
+        <div className="px-4 pb-3">
+          <ErrorNote>{remove.error.message}</ErrorNote>
+        </div>
+      )}
+      <p className="border-t border-line px-4 py-2 text-xs text-muted">
+        {COACH_NAME} remembers key facts across all chats. Deleting a chat keeps those memories.
+      </p>
+    </section>
   )
 }
 
@@ -270,15 +428,25 @@ function ActionCard({ message, action, photoThumb }: { message: ChatMessage; act
   const view = useMemo(() => describe(action), [action])
   if (!view) return null
   const Icon = view.icon
+  // For a meal: the photo it will be saved with (attached by the server, else this question's photo).
+  const photo = action.type === 'log_meal' ? action.photo_thumb || photoThumb : undefined
+  const description = action.type === 'log_meal' ? action.description : undefined
 
   return (
     <div className={`card p-3.5 ${action.status === 'dismissed' ? 'opacity-55' : ''}`}>
       <div className="flex items-start gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-energy-track text-energy">
-          <Icon className="size-4.5" aria-hidden />
-        </div>
+        {photo ? (
+          <img src={photo} alt="" className="size-14 shrink-0 rounded-lg object-cover" />
+        ) : (
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-energy-track text-energy">
+            <Icon className="size-4.5" aria-hidden />
+          </div>
+        )}
         <div className="min-w-0 flex-1">
           <p className="font-medium leading-snug">{view.title}</p>
+          {description && description !== view.title && (
+            <p className="mt-0.5 line-clamp-2 text-[13px] text-ink-2">{description}</p>
+          )}
           <p className="mt-0.5 text-[13px] text-muted">{view.detail}</p>
           {view.items && view.items.length > 0 && (
             <ul className="mt-2 space-y-0.5 text-[12px] text-ink-2">
@@ -304,9 +472,20 @@ function ActionCard({ message, action, photoThumb }: { message: ChatMessage; act
 
       <div className="mt-3 flex items-center justify-end gap-2">
         {action.status === 'applied' ? (
-          <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-good">
-            <CircleCheck className="size-4" aria-hidden /> {view.doneLabel}
-          </span>
+          <>
+            <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-good">
+              <CircleCheck className="size-4" aria-hidden /> {view.doneLabel}
+            </span>
+            {action.type === 'log_meal' && !action.eaten_at ? (
+              <Link to="/" className="btn-ghost px-2.5 py-1.5 text-[13px]">
+                View in Today
+              </Link>
+            ) : action.type !== 'update_targets' ? (
+              <Link to="/weekly" className="btn-ghost px-2.5 py-1.5 text-[13px]">
+                View in Week
+              </Link>
+            ) : null}
+          </>
         ) : action.status === 'dismissed' ? (
           <span className="text-[13px] text-muted">Dismissed</span>
         ) : (

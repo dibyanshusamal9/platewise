@@ -8,7 +8,8 @@
 --   daily_goals    your targets; a new row each day you change them (reports use the latest)
 --   meals          one row per logged meal, macros estimated by Gemini (or edited by the user)
 --   user_memories  facts Saffron, the AI coach, remembers about you
---   chat_messages  your conversation with Saffron, including proposed actions
+--   chat_messages  your messages with Saffron, including proposed actions
+--   chat_conversations  separate chats ("New chat"); memories are shared across them
 -- ════════════════════════════════════════════════════════════════════════════
 
 
@@ -179,12 +180,51 @@ create table if not exists public.chat_messages (
 create index if not exists chat_messages_user_created_idx on public.chat_messages (user_id, created_at desc);
 
 
+-- ─── 6. chat_conversations: separate chats with Saffron ("New chat") ───────────
+-- Each message belongs to one conversation. Saffron's memories are shared by all of them.
+create table if not exists public.chat_conversations (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null default auth.uid() references public.users (id) on delete cascade,
+  title       text not null default 'New chat' check (char_length(title) between 1 and 80),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create index if not exists chat_conversations_user_updated_idx on public.chat_conversations (user_id, updated_at desc);
+
+drop trigger if exists chat_conversations_touch_updated_at on public.chat_conversations;
+create trigger chat_conversations_touch_updated_at
+  before update on public.chat_conversations
+  for each row execute function public.touch_updated_at();
+
+alter table public.chat_messages
+  add column if not exists conversation_id uuid references public.chat_conversations (id) on delete cascade;
+create index if not exists chat_messages_conversation_idx on public.chat_messages (conversation_id, created_at);
+
+-- Messages from before conversations existed move into one "Earlier chat" per person.
+insert into public.chat_conversations (user_id, title, created_at, updated_at)
+select user_id, 'Earlier chat', min(created_at), max(created_at)
+from public.chat_messages
+where conversation_id is null
+group by user_id;
+
+update public.chat_messages m
+set conversation_id = c.id
+from public.chat_conversations c
+where m.conversation_id is null
+  and c.user_id = m.user_id
+  and c.title = 'Earlier chat';
+
+alter table public.chat_messages alter column conversation_id set not null;
+
+
 -- ─── Row Level Security: every user sees and edits only their own rows ──────
 alter table public.users       enable row level security;
 alter table public.daily_goals enable row level security;
 alter table public.meals       enable row level security;
 alter table public.user_memories enable row level security;
 alter table public.chat_messages enable row level security;
+alter table public.chat_conversations enable row level security;
 
 drop policy if exists "users: read own profile"   on public.users;
 drop policy if exists "users: update own profile" on public.users;
@@ -214,10 +254,16 @@ create policy "chat_messages: owner has full access" on public.chat_messages
   for all to authenticated
   using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 
+drop policy if exists "chat_conversations: owner has full access" on public.chat_conversations;
+create policy "chat_conversations: owner has full access" on public.chat_conversations
+  for all to authenticated
+  using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
+
 -- Explicit Data API grants (RLS above still restricts rows). Anonymous visitors get nothing.
-revoke all on public.users, public.daily_goals, public.meals, public.user_memories, public.chat_messages from anon;
+revoke all on public.users, public.daily_goals, public.meals, public.user_memories, public.chat_messages, public.chat_conversations from anon;
 grant select, update                 on public.users       to authenticated;
 grant select, insert, update, delete on public.daily_goals to authenticated;
 grant select, insert, update, delete on public.meals       to authenticated;
 grant select, insert, update, delete on public.user_memories to authenticated;
 grant select, insert, update, delete on public.chat_messages to authenticated;
+grant select, insert, update, delete on public.chat_conversations to authenticated;

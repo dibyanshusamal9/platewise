@@ -13,6 +13,8 @@ const CoachInput = z
     thumbnails: z.array(ThumbnailSchema).max(MAX_PHOTOS).default([]),
     /** Date#getTimezoneOffset(): lets the coach reason in the person's local day. */
     tzOffsetMinutes: z.number().int().min(-840).max(840),
+    /** Continue this chat; omitted = start a new one. */
+    conversationId: z.uuid().optional(),
   })
   .refine((d) => d.text.length > 0 || d.images.length > 0, 'Type a message or add a photo.')
 
